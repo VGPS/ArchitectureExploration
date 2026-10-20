@@ -4,6 +4,12 @@ target/
 !**/src/test/**/target/
 .kotlin
 .env
+runInstructions.md
+
+### Prior auth data and tools (large binaries / raw policy text) ###
+tools/synthea*.jar
+data/
+synthea-output/
 
 ### IntelliJ IDEA ###
 .idea/modules.xml

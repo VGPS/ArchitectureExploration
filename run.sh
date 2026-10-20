@@ -14,8 +14,10 @@
 # hood, so this is the version that's actually steppable in a debugger.
 #
 # Usage:
-#   ./run.sh                                  # runs com.wgblackmon.Main
-#   ./run.sh com.wgblackmon.mcp.McpSmokeTest   # runs a different main class
+#   ./run.sh                                            # com.wgblackmon.Main
+#   ./run.sh com.wgblackmon.web.WebApplication          # Track C web UI
+#   ./run.sh --debug com.wgblackmon.web.WebApplication  # same, JDWP on port 5005
+#                                                       # (suspend=n — attach any time)
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -30,6 +32,17 @@ if [ -f .env ]; then
     set +a
 fi
 
+# Optional --debug flag: attaches a JDWP agent so IntelliJ (or any debugger)
+# can connect on port 5005 after the process starts (suspend=n means the JVM
+# does not pause waiting for a debugger — it starts immediately and you attach
+# whenever you're ready).
+DEBUG_OPTS=""
+if [[ "${1:-}" == "--debug" ]]; then
+    DEBUG_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+    shift
+    echo "[run.sh] Debug mode: JDWP listening on port 5005 (attach any time after startup)"
+fi
+
 MAIN_CLASS="${1:-com.wgblackmon.Main}"
 
 echo "[run.sh] Compiling ..."
@@ -39,4 +52,4 @@ mvn -q dependency:build-classpath -Dmdep.outputFile=target/.classpath.txt
 CP="target/classes;target/test-classes;$(cat target/.classpath.txt)"
 
 echo "[run.sh] Running $MAIN_CLASS ..."
-exec java -cp "$CP" "$MAIN_CLASS"
+exec java $DEBUG_OPTS -cp "$CP" "$MAIN_CLASS"

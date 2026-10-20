@@ -12,7 +12,30 @@
         <maven.compiler.source>22</maven.compiler.source>
         <maven.compiler.target>22</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <tailwind.skip>true</tailwind.skip>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Must come before the spring-boot-dependencies import below: Maven resolves
+                 the first dependencyManagement entry for a given groupId:artifactId, and
+                 Spring Boot 3.3.5's BOM pins this to 2.17.2, which lacks classes (e.g.
+                 JsonSerializeAs) that mcp-json-jackson3's jackson3 databind requires at
+                 runtime (NoClassDefFoundError). 2.21 satisfies both. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>2.21</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>3.3.5</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -35,14 +58,84 @@
             <artifactId>spring-ai-mcp</artifactId>
             <version>2.0.1</version>
         </dependency>
+
+        <!-- Track C: web layer -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <exclusions>
+                <!-- Keep slf4j-simple; exclude Logback to avoid two SLF4J bindings -->
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-logging</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-thymeleaf</artifactId>
+        </dependency>
+
+        <!-- Relational / vector database -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.4</version>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.3.232</version>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.pgvector</groupId>
+            <artifactId>pgvector</artifactId>
+            <version>0.1.6</version>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!-- -parameters preserves method param names so Spring MVC can map @RequestParam by name -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <source>22</source>
+                    <target>22</target>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>tailwind-build</id>
+                        <phase>generate-resources</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>${project.basedir}/tools/tailwindcss.exe</executable>
+                            <arguments>
+                                <argument>-i</argument>
+                                <argument>${project.basedir}/src/main/resources/static/css/tailwind-source.css</argument>
+                                <argument>-o</argument>
+                                <argument>${project.basedir}/src/main/resources/static/css/tailwind.css</argument>
+                                <argument>--minify</argument>
+                            </arguments>
+                            <skip>${tailwind.skip}</skip>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

@@ -3,8 +3,9 @@
 ## What This Project Is
 
 A Java 22 / Maven sandbox for prototyping agent-harness architecture: the model-call loop,
-tool-use plumbing, and MCP (Model Context Protocol) servers/clients. No web layer, no
-persistence, no unrelated product domain — just the mechanics of building agents.
+tool-use plumbing, MCP (Model Context Protocol) servers/clients, and a prior authorization
+demo UI (Track C). No unrelated product domain — just the mechanics of building agents and
+illustrating them.
 
 The repo deliberately holds **two parallel tracks** so they can be compared side by side:
 
@@ -12,6 +13,7 @@ The repo deliberately holds **two parallel tracks** so they can be compared side
 |---|---|---|
 | A — minimal harness | Hand-rolled against the raw Anthropic Java SDK and raw MCP Java SDK, no framework | Built |
 | B — hexagonal / Spring AI | Ports-and-adapters domain core, Spring AI for MCP integration, spec-driven tool contracts | Built |
+| C — prior auth UI | Spring Boot + Thymeleaf + Tailwind CSS + HTMX + Alpine.js — web layer illustrating the prior auth agent | Built, agent wired end-to-end, live-tested |
 
 Comparing a from-scratch harness against a framework-assisted one *is* the point of an
 "architecture exploration" repo — Track B is not a replacement for Track A, and nothing in
@@ -26,6 +28,7 @@ Track A should be migrated into Track B's structure.
 ./run.sh com.wgblackmon.hexagonal.bootstrap.HexagonalMain   # Track B equivalent
 ./run.sh com.wgblackmon.mcp.McpSmokeTest                # Track A MCP smoke test
 ./run.sh com.wgblackmon.hexagonal.HexagonalMcpSmokeTest  # Track B MCP smoke test
+./run.sh com.wgblackmon.web.WebApplication              # Track C: prior auth UI at http://localhost:8080
 ```
 
 `run.sh` sources `.env` (if present), compiles, builds the classpath, and runs the given
@@ -157,6 +160,114 @@ deliberately bare baseline:
 - `src/main/resources/simplelogger.properties` sets `defaultLogLevel=debug` so these
   traces are visible by default without extra JVM flags. Harmless for Track A, which has
   zero log statements today.
+
+---
+
+## Track C — Prior Auth UI (`com.wgblackmon.web`)
+
+Spring Boot 3.3.5 web layer for illustrating the prior authorization agent. Entry point:
+`com.wgblackmon.web.WebApplication` — runs on port 8080.
+
+### Stack (same as AIHealthcare)
+
+| Concern | Technology | How delivered |
+|---|---|---|
+| Server-side rendering | Thymeleaf | `spring-boot-starter-thymeleaf` |
+| CSS framework | Tailwind CSS v4 | Standalone CLI exe (`tools/tailwindcss.exe`) built by Maven exec plugin |
+| Reactivity | Alpine.js v3 | CDN in dev; vendor from AIHealthcare `static/js/` for production |
+| Partial updates | HTMX v2 | CDN in dev; vendor from AIHealthcare `static/js/` for production |
+| Charts | Chart.js | CDN |
+
+### Tailwind CLI setup (one-time, manual)
+
+1. Copy `tools/tailwindcss.exe` from `C:\workspaces\SpringAIClaude\AIHealthcare\tools\`.
+2. Set `tailwind.skip=false` in `pom.xml` properties (or pass `-Dtailwind.skip=false` to Maven).
+3. Remove the `<script src="https://cdn.tailwindcss.com">` CDN tag from each template and
+   uncomment the `<link rel="stylesheet" th:href="@{/css/tailwind.css}">` line.
+
+Until the CLI is in place, the CDN tag provides Tailwind styling — the UI looks correct in
+development without any extra setup.
+
+### Structure
+
+```
+com.wgblackmon.web/
+  WebApplication.java          @SpringBootApplication, port 8080
+  controller/
+    PriorAuthController.java   GET /prior-auth (form), POST /prior-auth/submit (HTMX fragment)
+
+src/main/resources/
+  application.properties       port + Thymeleaf config
+  static/css/
+    tailwind-source.css        three @tailwind directives (Tailwind CLI input)
+    tailwind.css               CLI output — placeholder until exe is in place
+    styles.css                 HTMX indicator helpers
+  templates/prior-auth/
+    index.html                 main form + results panel
+    result-fragment.html       HTMX swap target (currently stub; wire PriorAuthService here)
+```
+
+### The agent, wired end-to-end
+
+`PriorAuthController.submit()` calls `com.wgblackmon.web.service.PriorAuthService`, which
+builds a fresh hexagonal `Agent` (Track B) per request — `Agent` holds conversation history
+as instance state, so it can't be a shared Spring bean — and runs it with three tools, each
+wrapped in a `TracingTool` decorator that records the call into a trace list for display:
+
+- `GetPatientRecordTool` — real 4-table Postgres query (demographics, conditions,
+  medications, observations) for local/Synthea patient IDs (`demo-001`, Synthea UUIDs).
+- `SearchCoveragePolicyTool` — pgvector cosine-similarity search over
+  `coverage_policy_chunks`, embedded via Ollama (`nomic-embed-text`). Returns chunks from
+  both CMS LCD L38467 and Aetna CPB 0157 — the tool doesn't care which source a chunk
+  came from, so dual-policy citation is automatic.
+- `FhirPatientTool` — queries the public HAPI FHIR R4 test server for FHIR-sourced patient
+  IDs (`nhanes-120300`), used when a local DB record doesn't exist.
+
+A cheap Haiku 4.5 call pre-extracts structured fields from free-text clinical notes before
+the main Sonnet 5 agent run, to reduce context noise. `PriorAuthService.parseResponse()`
+parses the agent's structured text output (DETERMINATION/CRITERIA/GAPS/APPEAL_POINTS/
+RATIONALE sections) into `PriorAuthResult`, which `result-fragment.html` renders as a
+criteria checklist, gap panel, collapsible appeal-letter section, and tool-call trace.
+
+See `prior-auth-plan.md` for the full build log and live-test results (phases 1-4, all done).
+
+**Spring Boot logging note:** `spring-boot-starter-logging` (Logback) is excluded from the
+web starter to avoid a second SLF4J binding alongside `slf4j-simple`. Spring Boot's own log
+output goes through `slf4j-simple` instead. With `defaultLogLevel=debug` in
+`simplelogger.properties`, Spring's internal startup logs are verbose — tolerable for
+development, quieted with `-Dorg.slf4j.simpleLogger.defaultLogLevel=info` if needed.
+
+---
+
+## Databases (wired up, not yet used)
+
+Postgres (with pgvector) and H2 are available as dependencies. A neutral factory lives at
+`com.wgblackmon.db.DataSources` — no Spring, no framework, just HikariCP pools constructible
+from a plain `main()`:
+
+```java
+DataSource pg = DataSources.postgres();       // reads POSTGRES_URL/POSTGRES_USER/DB_PASSWORD from env
+DataSource h2 = DataSources.h2InMemory("my_db");
+```
+
+**Environment variables** (in `.env`, already git-ignored):
+```
+POSTGRES_URL=jdbc:postgresql://localhost:5432/architecture_exploration
+POSTGRES_USER=admin
+DB_PASSWORD=<same value as AIHealthcare>
+```
+`DB_PASSWORD` matches the name used in the AIHealthcare sibling project's `.env` — no duplicate
+entry needed.
+
+**Before using vector columns in Postgres**, run once in psql:
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+The `com.pgvector:pgvector` JDBC type is on the classpath for `PGvector` column support.
+
+**Hexagonal note:** When a Track B feature actually uses a database, extract a domain port
+(`DataStore`, `VectorStore`, etc.) and put the `DataSources` call behind an adapter — the
+`com.wgblackmon.db` package is neutral infrastructure, not a domain abstraction.
 
 ---
 
